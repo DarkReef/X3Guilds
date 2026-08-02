@@ -1,0 +1,18 @@
+{
+  "request_id": "request-0001",
+  "conversation_id": "ship-42-player",
+  "message": "Что происходит на вашем торговом маршруте?",
+  "entity": {
+    "entity_id": "ship-42",
+    "name": "Капитан Хаалас",
+    "kind": "ship",
+    "race": "Телади",
+    "faction": "PTNI",
+    "sector": "Profit Center Alpha",
+    "relation": 23,
+    "facts": [
+      "Игрок спас конвой 14 игровых дней назад",
+      "На маршруте зафиксированы нападения пиратов"
+    ]
+  }
+}
