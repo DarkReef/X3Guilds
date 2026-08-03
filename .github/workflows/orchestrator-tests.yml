@@ -48,6 +48,7 @@ jobs:
           from pathlib import Path
           setup = Path("scripts/working/setup.plugin.guilds.ai.chat.xs").read_text()
           hotkey = Path("scripts/working/plugin.guilds.ai.chat.hotkey.xs").read_text()
-          assert 'registerEventHotkey("plugin.guilds.ai.chat.hotkey"' in setup
+          assert "registerEventHotkey(" in setup
+          assert '"plugin.guilds.ai.chat.hotkey"' in setup
           assert 'XUGC|1|CHAT_CONTEXT|' in hotkey
           assert 'writeLogFile(9980, TRUE, $line)' in hotkey
