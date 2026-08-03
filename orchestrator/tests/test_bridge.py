@@ -1,45 +1,66 @@
-from urllib.parse import quote
+from x3guilds_ai.bridge import (
+    encode_chat_request,
+    encode_chat_response,
+    encode_context_selection,
+    parse_chat_request,
+    parse_context_selection,
+)
+from x3guilds_ai.models import (
+    ChatRequest,
+    ContextSelection,
+    DialogueResponse,
+    EntityContext,
+)
 
-from x3guilds_ai.bridge import encode_chat_response, parse_chat_request
-from x3guilds_ai.models import DialogueResponse
 
-
-def e(value: str) -> str:
-    return quote(value, safe="")
-
-
-def test_line_protocol_round_trip() -> None:
-    line = "|".join(
-        [
-            "XUGC",
-            "1",
-            "CHAT_REQUEST",
-            e("request-0001"),
-            e("conversation-7"),
-            e("ship-42"),
-            e("Капитан Хаалас"),
-            "ship",
-            e("Телади"),
-            e("PTNI"),
-            e("Profit Center Alpha"),
-            "23",
-            "18443300",
-            e("Назовите вашу цену."),
-        ]
+def make_entity() -> EntityContext:
+    return EntityContext(
+        entity_id="x3-1",
+        name="Капитан | Тон",
+        kind="ship",
+        race="Teladi",
+        faction="PTNI",
+        sector="Profit Center Alpha",
+        relation=100,
     )
 
-    request = parse_chat_request(line)
-    assert request.entity.name == "Капитан Хаалас"
-    assert request.message == "Назовите вашу цену."
-    assert request.game_time == 18443300
 
+def make_request() -> ChatRequest:
+    return ChatRequest(
+        request_id="req-0001",
+        conversation_id="npc:x3-1",
+        message="Цена | и %?",
+        game_time=42,
+        entity=make_entity(),
+    )
+
+
+def test_request_round_trip() -> None:
+    request = make_request()
+    assert parse_chat_request(encode_chat_request(request)) == request
+
+
+def test_context_round_trip() -> None:
+    context = ContextSelection(context_id="ctx-1", entity=make_entity(), game_time=42)
+    assert parse_context_selection(encode_context_selection(context)) == context
+
+
+def test_parser_accepts_log_prefix() -> None:
+    request = make_request()
+    line = "2026-08-03 00:00:00 INFO " + encode_chat_request(request)
+    assert parse_chat_request(line) == request
+
+
+def test_response_is_one_line() -> None:
     response = DialogueResponse(
-        request_id=request.request_id,
-        conversation_id=request.conversation_id,
+        request_id="req-0001",
+        conversation_id="npc:x3-1",
         provider="mock",
-        reply="Предлагаю 16 кредитов за единицу.",
-        mood="calculating",
+        reply="Принято\nкапитан.",
+        mood="calm",
+        memories=[],
+        actions=[],
     )
     encoded = encode_chat_response(response)
-    assert encoded.startswith("XUGC|1|CHAT_RESPONSE|request-0001|")
-    assert "%D0" in encoded
+    assert encoded.startswith("XUGC|1|CHAT_RESPONSE|")
+    assert "\n" not in encoded

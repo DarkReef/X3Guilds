@@ -1,55 +1,61 @@
-# Guilds AI Chat: architecture and bridge contract
+# Guilds Living Communications architecture
 
-## Authority split
-
-- X3FL/Guilds owns ships, stations, cargo, credits, notoriety and mission state.
-- The orchestrator owns dialogue generation, durable conversation history and request deduplication.
-- GigaChat may propose typed intents but cannot invoke arbitrary XScript.
-
-## Milestone 1 data flow
+## Complete runtime path
 
 ```text
-X3 exporter -> log09980.txt -> bridge adapter -> POST /v1/chat
-                                           -> SQLite memory
-                                           -> Mock or GigaChat provider
-                                           -> validated DialogueResponse
+X3 tracking target
+  -> registered XScript hotkey
+  -> XUGC CHAT_CONTEXT record in log09980.txt
+  -> checkpointed Python tailer
+  -> active target in Tk overlay
+  -> player text submission
+  -> validated ChatRequest
+  -> recent dialogue + durable memories from SQLite
+  -> Mock or GigaChat provider
+  -> strict ModelDialogue JSON schema
+  -> validated, logged response
+  -> always-on-top overlay
 ```
 
-The return channel into a running X3FL process is deliberately not assumed. It must
-pass a separate bridge probe before model-generated text is displayed inside the game.
-An overlay or a generated command resource can consume the same response meanwhile.
+The return path intentionally terminates in the overlay. Standard MSCI can reliably write logs, but no supported, low-risk real-time mechanism lets an external process inject arbitrary text into a running save. This design therefore gives a fully usable live chat without DLL injection or savegame mutation.
 
-## Line protocol
+## Protocol
 
-Requests use a single UTF-8 line. Dynamic values are URL-percent-encoded.
+### Target selection
+
+```text
+XUGC|1|CHAT_CONTEXT|context_id|entity_id|name|kind|race|faction|sector|relation|game_time
+```
+
+### Optional direct request
 
 ```text
 XUGC|1|CHAT_REQUEST|request_id|conversation_id|entity_id|name|kind|race|faction|sector|relation|game_time|message
 ```
 
-Responses:
+Fields produced by Python are percent-encoded. X3-generated context fields are treated as untrusted and validated by Pydantic. The parser extracts an embedded record from timestamped or prefixed X3 log lines.
 
-```text
-XUGC|1|CHAT_RESPONSE|request_id|conversation_id|mood|reply
-```
+## Reliability
 
-Properties:
+- checkpointer stores byte offset plus a hash of the immutable prefix already consumed;
+- appending to a short log does not replay prior records;
+- truncation or replacement resets the offset;
+- request IDs are idempotent and tied to a payload fingerprint;
+- duplicate IDs with different payloads fail closed;
+- SQLite runs in WAL mode;
+- GigaChat access tokens are cached and refreshed before expiry;
+- transient HTTP failures are retried with bounded backoff;
+- all provider output is parsed through a strict JSON schema;
+- model action payloads use per-action Pydantic schemas.
 
-- `request_id` is globally unique and makes processing idempotent;
-- an identical request is returned from SQLite without another model call;
-- malformed lines are rejected before provider invocation;
-- protocol version is explicit;
-- no secret is ever transferred through the game log.
+## Security model
 
-## Next bridge probe
+No GigaChat key enters X3, the savegame, diagnostics, or Git. The model can only propose an allowlisted intent. This PR does not execute model intents in X3. A later corporation/economy milestone must add a deterministic validator and explicit game-side executor for each action type.
 
-The next game-side patch should prove this cycle before adding menus or economic actions:
+## In-game source
 
-1. X3 writes a fixed `CHAT_REQUEST` line.
-2. Python parses it and produces a mock response.
-3. A controlled return-channel prototype displays the response.
-4. X3 writes an acknowledgement containing the same `request_id`.
-5. Replaying the command does not display or execute it twice.
+The XScript source is stored under `scripts/working`. XScript Compiler 0.8 compiles it into native X3FL XML. The setup script registers one event hotkey; the hotkey exports only the current target's identity and context.
 
-Only after this succeeds under normal speed, SETA, save/load and service restart should
-the bridge be connected to GigaChat and Guilds actions.
+## Testing boundary
+
+The Python runtime is fully unit-tested and runs in CI. The generated X3 XML must be compiled with the official XScript Compiler and smoke-tested in a local Guilds installation because CI has neither the proprietary game data nor a running X3FL process.

@@ -1,19 +1,20 @@
-name: Orchestrator tests
+name: Living communications tests
 
 on:
   pull_request:
     paths:
       - "orchestrator/**"
-      - "docs/AI_CHAT_ARCHITECTURE.md"
+      - "scripts/working/*ai.chat*.xs"
+      - "t/9980-L*.xml"
+      - "BUILD/*ai-chat*.ps1"
       - ".github/workflows/orchestrator-tests.yml"
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: orchestrator-tests-${{ github.ref }}
-  cancel-in-progress: true
+  push:
+    branches: [main]
+    paths:
+      - "orchestrator/**"
+      - "scripts/working/*ai.chat*.xs"
+      - "t/9980-L*.xml"
+      - "BUILD/*ai-chat*.ps1"
 
 jobs:
   test:
@@ -24,7 +25,11 @@ jobs:
           fetch-depth: 1
           sparse-checkout: |
             orchestrator
-            docs/AI_CHAT_ARCHITECTURE.md
+            scripts/working/setup.plugin.guilds.ai.chat.xs
+            scripts/working/plugin.guilds.ai.chat.hotkey.xs
+            t/9980-L044.xml
+            t/9980-L007.xml
+            BUILD/build-ai-chat-scripts.ps1
           sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v5
         with:
@@ -35,3 +40,14 @@ jobs:
         run: python -m pip install -e './orchestrator[dev]'
       - name: Test
         run: python -m pytest orchestrator/tests
+      - name: Compile Python bytecode
+        run: python -m compileall -q orchestrator/x3guilds_ai
+      - name: Validate XScript source contract
+        shell: python
+        run: |
+          from pathlib import Path
+          setup = Path("scripts/working/setup.plugin.guilds.ai.chat.xs").read_text()
+          hotkey = Path("scripts/working/plugin.guilds.ai.chat.hotkey.xs").read_text()
+          assert 'registerEventHotkey("plugin.guilds.ai.chat.hotkey"' in setup
+          assert 'XUGC|1|CHAT_CONTEXT|' in hotkey
+          assert 'writeLogFile(9980, TRUE, $line)' in hotkey

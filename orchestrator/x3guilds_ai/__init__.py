@@ -1,3 +1,3 @@
-"""X3 Guilds AI dialogue orchestrator."""
+"""GigaChat dialogue sidecar for X3 Guilds."""
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

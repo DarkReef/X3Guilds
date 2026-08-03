@@ -4,24 +4,22 @@ from x3guilds_ai.models import ChatRequest, ModelDialogue, StoredMessage
 
 
 class MockDialogueProvider:
-    """Deterministic provider for tests and offline play."""
-
     name = "mock"
 
     async def generate(
         self,
         request: ChatRequest,
         history: list[StoredMessage],
+        memories: list[str],
     ) -> ModelDialogue:
-        entity = request.entity
-        faction = entity.faction or entity.race or "независимый капитан"
-        sector = f" в секторе {entity.sector}" if entity.sector else ""
+        suffix = f" Мы уже говорили {len(history) // 2} раз." if history else ""
+        memory_hint = f" Я помню: {memories[-1]}." if memories else ""
         return ModelDialogue(
             reply=(
-                f"{entity.name}, {faction}{sector}, на связи. "
-                f"Ваш запрос принят: «{request.message}»."
+                f"{request.entity.name} принимает сообщение: «{request.message}»."
+                f" Канал связи работает.{suffix}{memory_hint}"
             ),
-            mood="professional",
-            memories=[f"Игрок обратился с запросом: {request.message[:180]}"],
+            mood="neutral",
+            memories=[f"Игрок сказал: {request.message[:240]}"],
             actions=[],
         )

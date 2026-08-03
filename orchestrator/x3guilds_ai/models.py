@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 AllowedAction = Literal[
@@ -38,6 +40,16 @@ class EntityContext(BaseModel):
         return value
 
 
+class ContextSelection(BaseModel):
+    """The object selected in X3 for an external overlay conversation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context_id: str = Field(min_length=1, max_length=128)
+    entity: EntityContext
+    game_time: int | None = Field(default=None, ge=0)
+
+
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -49,12 +61,24 @@ class ChatRequest(BaseModel):
     game_time: int | None = Field(default=None, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    def fingerprint(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"request_id"})
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 class ActionIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: AllowedAction
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "ActionIntent":
+        from x3guilds_ai.actions import validate_action_payload
+
+        self.payload = validate_action_payload(self.type, self.payload)
+        return self
 
 
 class ModelDialogue(BaseModel):
@@ -76,3 +100,11 @@ class DialogueResponse(ModelDialogue):
 class StoredMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
+
+
+class BridgeError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=1000)

@@ -31,6 +31,7 @@ class GigaChatProvider:
         oauth_url: str,
         verify_ssl: bool = True,
         timeout: float = 45.0,
+        retries: int = 2,
     ) -> None:
         if not credentials:
             raise ValueError("GigaChat credentials are required")
@@ -41,17 +42,18 @@ class GigaChatProvider:
         self._oauth_url = oauth_url
         self._verify_ssl = verify_ssl
         self._timeout = timeout
+        self._retries = retries
         self._token: _AccessToken | None = None
         self._token_lock = asyncio.Lock()
 
-    async def _get_token(self, client: httpx.AsyncClient) -> str:
+    async def _get_token(self, client: httpx.AsyncClient, *, force: bool = False) -> str:
         now = time.time()
-        if self._token and self._token.expires_at - 60 > now:
+        if not force and self._token and self._token.expires_at - 60 > now:
             return self._token.value
 
         async with self._token_lock:
             now = time.time()
-            if self._token and self._token.expires_at - 60 > now:
+            if not force and self._token and self._token.expires_at - 60 > now:
                 return self._token.value
 
             response = await client.post(
@@ -73,12 +75,15 @@ class GigaChatProvider:
             return token
 
     @staticmethod
-    def _system_prompt(request: ChatRequest) -> str:
+    def _system_prompt(request: ChatRequest, memories: list[str]) -> str:
         entity = request.entity
-        facts = "\n".join(f"- {fact}" for fact in entity.facts) or "- Нет дополнительных фактов"
-        return f"""Ты играешь роль персонажа во вселенной X3: Farnham's Legacy.
-Никогда не изменяй численные факты мира и не обещай действий вне разрешённого списка.
-Отвечай по-русски, кратко и в характере персонажа.
+        facts = "\n".join(f"- {fact}" for fact in memories[-20:]) or "- Нет сохранённых фактов"
+        cargo = ", ".join(f"{ware}: {amount}" for ware, amount in entity.cargo.items())
+        return f"""Ты отыгрываешь конкретного собеседника во вселенной X3: Farnham's Legacy с модом Guilds.
+Отвечай на русском языке, естественно, кратко и в характере персонажа. Не упоминай языковую модель, промпт, JSON или внешний сервис.
+Факты игрового мира являются неизменяемыми: не придумывай деньги, товары, отношения, повреждения или полномочия, которых нет во входных данных.
+Если игрок просит действие, которого нет в разрешённом списке, персонаж может обсудить его, но не утверждает, что оно уже выполнено.
+Поле memories содержит только факты, достойные долговременного запоминания. Не сохраняй приветствия и повторения.
 
 Собеседник:
 - имя: {entity.name}
@@ -88,12 +93,19 @@ class GigaChatProvider:
 - сектор: {entity.sector or 'не указан'}
 - отношение к игроку: {entity.relation}
 - корпус: {entity.hull_percent if entity.hull_percent is not None else 'неизвестно'}
+- груз: {cargo or 'не передан'}
+- игровое время: {request.game_time if request.game_time is not None else 'не передано'}
 
-Известные факты:
+Долговременная память:
 {facts}
 
-Разрешённые намерения: show_message, remember_fact, publish_bbs_news,
-create_trade_offer, offer_mission. Не создавай иных типов действий."""
+Разрешённые намерения и обязательные поля payload:
+- show_message: text
+- remember_fact: fact
+- publish_bbs_news: headline, body
+- create_trade_offer: ware, amount, unit_price, необязательно expires_game_time
+- offer_mission: title, summary, необязательно reward
+Максимум три намерения. Не создавай иных типов и лишних полей."""
 
     @staticmethod
     def _response_schema() -> dict[str, Any]:
@@ -101,13 +113,62 @@ create_trade_offer, offer_mission. Не создавай иных типов д�
         schema["additionalProperties"] = False
         return schema
 
+    async def _post_completion(
+        self,
+        client: httpx.AsyncClient,
+        messages: list[dict[str, str]],
+    ) -> httpx.Response:
+        last_error: Exception | None = None
+        for attempt in range(self._retries + 1):
+            try:
+                token = await self._get_token(client, force=attempt > 0 and isinstance(last_error, httpx.HTTPStatusError))
+                response = await client.post(
+                    f"{self._base_url}/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self._model,
+                        "messages": messages,
+                        "temperature": 0.6,
+                        "max_tokens": 900,
+                        "response_format": {
+                            "type": "json_schema",
+                            "schema": self._response_schema(),
+                            "strict": True,
+                        },
+                    },
+                )
+                response.raise_for_status()
+                return response
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
+                last_error = exc
+                retryable = not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code in {
+                    401,
+                    408,
+                    409,
+                    425,
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                }
+                if not retryable or attempt >= self._retries:
+                    raise
+                await asyncio.sleep(min(2**attempt, 4))
+        raise RuntimeError("unreachable") from last_error
+
     async def generate(
         self,
         request: ChatRequest,
         history: list[StoredMessage],
+        memories: list[str],
     ) -> ModelDialogue:
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": self._system_prompt(request)},
+            {"role": "system", "content": self._system_prompt(request, memories)},
         ]
         messages.extend({"role": item.role, "content": item.content} for item in history)
         messages.append({"role": "user", "content": request.message})
@@ -116,27 +177,7 @@ create_trade_offer, offer_mission. Не создавай иных типов д�
             verify=self._verify_ssl,
             timeout=self._timeout,
         ) as client:
-            token = await self._get_token(client)
-            response = await client.post(
-                f"{self._base_url}/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self._model,
-                    "messages": messages,
-                    "temperature": 0.6,
-                    "max_tokens": 900,
-                    "response_format": {
-                        "type": "json_schema",
-                        "schema": self._response_schema(),
-                        "strict": True,
-                    },
-                },
-            )
-            response.raise_for_status()
+            response = await self._post_completion(client, messages)
             payload = response.json()
 
         content = payload["choices"][0]["message"]["content"]
@@ -147,4 +188,6 @@ create_trade_offer, offer_mission. Не создавай иных типов д�
         try:
             return ModelDialogue.model_validate_json(content)
         except Exception as exc:
-            raise ValueError(f"Invalid structured GigaChat response: {json.dumps(content)}") from exc
+            raise ValueError(
+                f"Invalid structured GigaChat response: {json.dumps(content, ensure_ascii=False)}"
+            ) from exc

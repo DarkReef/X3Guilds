@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "x3guilds-ai-orchestrator"
-version = "0.1.0"
-description = "External dialogue and memory service for X3 Guilds"
+version = "0.3.0"
+description = "GigaChat dialogue, memory and overlay sidecar for X3 Guilds"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,11 +20,13 @@ dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
 
 [project.scripts]
 x3guilds-ai = "x3guilds_ai.api:run"
+x3guilds-ai-desktop = "x3guilds_ai.runtime:run_desktop"
 x3guilds-ai-bridge = "x3guilds_ai.bridge_cli:run"
 
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.setuptools.packages.find]
 where = ["."]

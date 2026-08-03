@@ -1,89 +1,221 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
-import os
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from x3guilds_ai.bridge import encode_chat_response, parse_chat_request
+from x3guilds_ai.bridge import (
+    CONTEXT_MARKER,
+    REQUEST_MARKER,
+    encode_bridge_error,
+    encode_chat_response,
+    extract_protocol_record,
+    parse_chat_request,
+    parse_context_selection,
+)
+from x3guilds_ai.models import (
+    BridgeError,
+    ChatRequest,
+    ContextSelection,
+    DialogueResponse,
+)
 from x3guilds_ai.service import ChatService
 
 
+logger = logging.getLogger(__name__)
+BridgeCallback = Callable[[ChatRequest, DialogueResponse | BridgeError], Awaitable[None] | None]
+ContextCallback = Callable[[ContextSelection], Awaitable[None] | None]
+
+
 @dataclass(slots=True)
-class BridgeCheckpoint:
-    offset: int = 0
+class BridgeStats:
+    lines_seen: int = 0
+    contexts_seen: int = 0
+    requests_processed: int = 0
+    cached_responses: int = 0
+    invalid_lines: int = 0
+    failures: int = 0
 
 
 class FileBridge:
-    """Incrementally consumes XUGC lines from an X3 log file."""
-
     def __init__(
         self,
         *,
-        service: ChatService,
-        input_path: Path,
-        output_path: Path,
+        request_path: Path,
+        response_path: Path,
         checkpoint_path: Path,
+        diagnostics_path: Path,
+        service: ChatService,
+        callback: BridgeCallback | None = None,
+        context_callback: ContextCallback | None = None,
     ) -> None:
-        self._service = service
-        self._input_path = input_path
-        self._output_path = output_path
-        self._checkpoint_path = checkpoint_path
+        self.request_path = request_path
+        self.response_path = response_path
+        self.checkpoint_path = checkpoint_path
+        self.diagnostics_path = diagnostics_path
+        self.service = service
+        self.callback = callback
+        self.context_callback = context_callback
+        self.stats = BridgeStats()
 
-    def _load_checkpoint(self) -> BridgeCheckpoint:
+    def _prefix_hash(self, length: int) -> str:
+        if length <= 0 or not self.request_path.exists():
+            return ""
+        with self.request_path.open("rb") as handle:
+            return hashlib.sha256(handle.read(length)).hexdigest()
+
+    def _load_checkpoint(self) -> tuple[int, int, str]:
         try:
-            payload = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
-            return BridgeCheckpoint(offset=max(0, int(payload.get("offset", 0))))
+            payload = json.loads(self.checkpoint_path.read_text(encoding="utf-8"))
+            return (
+                max(0, int(payload.get("offset", 0))),
+                max(0, int(payload.get("prefix_length", 0))),
+                str(payload.get("prefix_hash", payload.get("head_hash", ""))),
+            )
         except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
-            return BridgeCheckpoint()
+            return 0, 0, ""
 
-    def _save_checkpoint(self, checkpoint: BridgeCheckpoint) -> None:
-        self._checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._checkpoint_path.with_suffix(self._checkpoint_path.suffix + ".tmp")
-        temporary.write_text(json.dumps({"offset": checkpoint.offset}), encoding="utf-8")
-        os.replace(temporary, self._checkpoint_path)
+    def _save_checkpoint(self, offset: int) -> None:
+        prefix_length = min(offset, 512)
+        prefix_hash = self._prefix_hash(prefix_length)
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.checkpoint_path.with_suffix(self.checkpoint_path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "offset": offset,
+                    "prefix_length": prefix_length,
+                    "prefix_hash": prefix_hash,
+                },
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(self.checkpoint_path)
 
-    def _read_available(self, offset: int) -> tuple[list[str], int]:
-        if not self._input_path.exists():
-            return [], 0
-        size = self._input_path.stat().st_size
-        if size < offset:
+    def _append_response(self, line: str) -> None:
+        self.response_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.response_path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(line)
+            handle.write("\n")
+            handle.flush()
+
+    def _append_diagnostic(self, payload: dict[str, object]) -> None:
+        self.diagnostics_path.mkdir(parents=True, exist_ok=True)
+        path = self.diagnostics_path / "bridge-events.jsonl"
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            handle.write("\n")
+
+    @staticmethod
+    async def _call_callback(callback, *args) -> None:
+        if callback is None:
+            return
+        returned = callback(*args)
+        if asyncio.iscoroutine(returned):
+            await returned
+
+    async def process_request(self, request: ChatRequest) -> DialogueResponse | BridgeError:
+        """Process a validated request from X3, overlay input, HTTP or tests."""
+        try:
+            response = await self.service.chat(request)
+            self._append_response(encode_chat_response(response))
+            self._append_diagnostic(
+                {
+                    "event": "response",
+                    "request": request.model_dump(mode="json"),
+                    "response": response.model_dump(mode="json"),
+                }
+            )
+            self.stats.requests_processed += 1
+            if response.cached:
+                self.stats.cached_responses += 1
+            await self._call_callback(self.callback, request, response)
+            return response
+        except Exception as exc:
+            self.stats.failures += 1
+            error = BridgeError(
+                request_id=request.request_id,
+                code=type(exc).__name__,
+                message=(str(exc) or type(exc).__name__)[:1000],
+            )
+            self._append_response(encode_bridge_error(error))
+            self._append_diagnostic(
+                {
+                    "event": "failure",
+                    "request": request.model_dump(mode="json"),
+                    "error": error.model_dump(mode="json"),
+                }
+            )
+            logger.exception("Failed to process X3 chat request %s", request.request_id)
+            await self._call_callback(self.callback, request, error)
+            return error
+
+    async def _process_protocol_line(self, line: str) -> None:
+        record = extract_protocol_record(line)
+        if record is None:
+            return
+        try:
+            if record.startswith(CONTEXT_MARKER):
+                context = parse_context_selection(record)
+                self.stats.contexts_seen += 1
+                self._append_diagnostic(
+                    {"event": "context", "context": context.model_dump(mode="json")}
+                )
+                await self._call_callback(self.context_callback, context)
+                return
+            if record.startswith(REQUEST_MARKER):
+                request = parse_chat_request(record)
+                await self.process_request(request)
+                return
+            raise ValueError("Unknown XUGC record type")
+        except Exception as exc:
+            self.stats.invalid_lines += 1
+            logger.warning("Ignoring invalid XUGC record: %s", exc)
+            self._append_diagnostic({"event": "invalid_request", "line": record, "error": str(exc)})
+
+    async def run_once(self) -> int:
+        if not self.request_path.exists():
+            return 0
+
+        file_size = self.request_path.stat().st_size
+        offset, prefix_length, previous_prefix_hash = self._load_checkpoint()
+        if offset > file_size:
             offset = 0
-        with self._input_path.open("r", encoding="utf-8", errors="replace") as stream:
-            stream.seek(offset)
-            lines = stream.readlines()
-            new_offset = stream.tell()
-        return lines, new_offset
+        elif offset and prefix_length and previous_prefix_hash:
+            if prefix_length > file_size or self._prefix_hash(prefix_length) != previous_prefix_hash:
+                offset = 0
 
-    def _append_output(self, line: str) -> None:
-        self._output_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._output_path.open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(line.rstrip("\r\n") + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-
-    async def process_available(self) -> int:
-        checkpoint = self._load_checkpoint()
-        lines, new_offset = await asyncio.to_thread(self._read_available, checkpoint.offset)
         processed = 0
-        for line in lines:
-            if not line.startswith("XUGC|"):
-                continue
-            try:
-                request = parse_chat_request(line)
-                response = await self._service.chat(request)
-                await asyncio.to_thread(self._append_output, encode_chat_response(response))
+        with self.request_path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+            handle.seek(offset)
+            while True:
+                line = handle.readline()
+                if not line:
+                    break
+                self.stats.lines_seen += 1
+                if REQUEST_MARKER not in line and CONTEXT_MARKER not in line:
+                    continue
+                await self._process_protocol_line(line)
                 processed += 1
-            except ValueError:
-                continue
-        checkpoint.offset = new_offset
-        await asyncio.to_thread(self._save_checkpoint, checkpoint)
+            offset = handle.tell()
+
+        self._save_checkpoint(offset)
         return processed
 
-    async def run_forever(self, poll_interval: float = 0.5) -> None:
-        if poll_interval < 0.1:
-            raise ValueError("poll_interval must be at least 0.1 seconds")
-        while True:
-            await self.process_available()
-            await asyncio.sleep(poll_interval)
+    async def run_forever(
+        self,
+        *,
+        poll_interval: float,
+        stop_event: asyncio.Event,
+    ) -> None:
+        while not stop_event.is_set():
+            await self.run_once()
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
+            except TimeoutError:
+                pass

@@ -1,18 +1,20 @@
 {
-  "request_id": "request-0001",
-  "conversation_id": "ship-42-player",
-  "message": "Что происходит на вашем торговом маршруте?",
+  "request_id": "manual-0001",
+  "conversation_id": "npc:x3-42",
+  "player_id": "player",
+  "message": "Что происходит в этом секторе?",
   "entity": {
-    "entity_id": "ship-42",
-    "name": "Капитан Хаалас",
+    "entity_id": "x3-42",
+    "name": "Капитан Хаалас Тон",
     "kind": "ship",
-    "race": "Телади",
+    "race": "Teladi",
     "faction": "PTNI",
     "sector": "Profit Center Alpha",
-    "relation": 23,
-    "facts": [
-      "Игрок спас конвой 14 игровых дней назад",
-      "На маршруте зафиксированы нападения пиратов"
-    ]
-  }
+    "relation": 250,
+    "hull_percent": 87,
+    "cargo": {},
+    "facts": []
+  },
+  "game_time": 182400,
+  "metadata": {}
 }

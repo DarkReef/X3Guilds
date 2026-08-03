@@ -12,4 +12,5 @@ class DialogueProvider(Protocol):
         self,
         request: ChatRequest,
         history: list[StoredMessage],
+        memories: list[str],
     ) -> ModelDialogue: ...

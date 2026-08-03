@@ -1,67 +1,74 @@
 from __future__ import annotations
 
+import json
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
 from x3guilds_ai.config import Settings
-from x3guilds_ai.memory import SQLiteMemoryStore
+from x3guilds_ai.factory import create_service
 from x3guilds_ai.models import ChatRequest, DialogueResponse
-from x3guilds_ai.providers.gigachat import GigaChatProvider
-from x3guilds_ai.providers.mock import MockDialogueProvider
-from x3guilds_ai.service import ChatService
 
 
-def build_service(settings: Settings) -> ChatService:
-    memory = SQLiteMemoryStore(settings.database_path)
-    if settings.provider == "mock":
-        provider = MockDialogueProvider()
-    elif settings.provider == "gigachat":
-        if not settings.gigachat_credentials:
-            raise ValueError("X3AI_GIGACHAT_CREDENTIALS is required for gigachat provider")
-        provider = GigaChatProvider(
-            credentials=settings.gigachat_credentials,
-            scope=settings.gigachat_scope,
-            model=settings.gigachat_model,
-            base_url=settings.gigachat_base_url,
-            oauth_url=settings.gigachat_oauth_url,
-            verify_ssl=settings.gigachat_verify_ssl,
-        )
-    else:
-        raise ValueError(f"Unsupported provider: {settings.provider}")
-
-    return ChatService(
-        provider=provider,
-        memory=memory,
-        history_limit=settings.history_limit,
-    )
+settings = Settings.from_env()
+service = create_service(settings)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    settings = settings or Settings.from_env()
-    service = build_service(settings)
-    app = FastAPI(title="X3 Guilds AI Orchestrator", version="0.1.0")
-
-    @app.on_event("startup")
-    async def startup() -> None:
-        await service.initialize()
-
-    @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "provider": settings.provider}
-
-    @app.post("/v1/chat", response_model=DialogueResponse)
-    async def chat(request: ChatRequest) -> DialogueResponse:
-        try:
-            return await service.chat(request)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    return app
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await service.initialize()
+    yield
 
 
-app = create_app()
+app = FastAPI(title="X3 Guilds AI", version="0.3.0", lifespan=lifespan)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok", "provider": settings.provider}
+
+
+@app.post("/v1/chat", response_model=DialogueResponse)
+async def chat(request: ChatRequest) -> DialogueResponse:
+    try:
+        return await service.chat(request)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/ui", response_class=HTMLResponse)
+async def ui() -> str:
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "chat-request.json"
+    try:
+        example = json.loads(example_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        example = {}
+    escaped = json.dumps(example, ensure_ascii=False, indent=2).replace("</", "<\\/")
+    return f"""<!doctype html>
+<html lang='ru'>
+<meta charset='utf-8'>
+<title>X3 Guilds AI</title>
+<style>
+body{{font-family:system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10141b;color:#e7edf5}}
+textarea{{width:100%;min-height:420px;background:#171e28;color:#e7edf5;border:1px solid #39485d;padding:12px}}
+button{{padding:10px 18px;margin:12px 0}} pre{{white-space:pre-wrap;background:#171e28;padding:12px}}
+</style>
+<h1>X3 Guilds · GigaChat bridge</h1>
+<textarea id='request'>{escaped}</textarea>
+<button onclick='send()'>Отправить</button>
+<pre id='response'></pre>
+<script>
+async function send(){{
+ const body=JSON.parse(document.getElementById('request').value);
+ const r=await fetch('/v1/chat',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
+ document.getElementById('response').textContent=JSON.stringify(await r.json(),null,2);
+}}
+</script>
+</html>"""
 
 
 def run() -> None:
-    import uvicorn
-
-    uvicorn.run("x3guilds_ai.api:app", host="127.0.0.1", port=8765, reload=False)
+    uvicorn.run("x3guilds_ai.api:app", host="127.0.0.1", port=8787, reload=False)
