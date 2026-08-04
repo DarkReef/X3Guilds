@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hmac
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 
 from x3guilds_ai.config import Settings
@@ -13,7 +14,7 @@ from x3guilds_ai.factory import create_service
 from x3guilds_ai.models import ChatRequest, DialogueResponse
 
 
-settings = Settings.from_env()
+settings = Settings.load()
 service = create_service(settings)
 
 
@@ -23,7 +24,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="X3 Guilds AI", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="X3 Guilds AI", version="0.4.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -31,8 +32,18 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "provider": settings.provider}
 
 
+def _authorize(supplied: str | None) -> None:
+    expected = settings.api_password
+    if expected and (supplied is None or not hmac.compare_digest(supplied, expected)):
+        raise HTTPException(status_code=401, detail="Invalid X3 AI API password")
+
+
 @app.post("/v1/chat", response_model=DialogueResponse)
-async def chat(request: ChatRequest) -> DialogueResponse:
+async def chat(
+    request: ChatRequest,
+    x_x3ai_password: str | None = Header(default=None, alias="X-X3AI-Password"),
+) -> DialogueResponse:
+    _authorize(x_x3ai_password)
     try:
         return await service.chat(request)
     except Exception as exc:
@@ -48,26 +59,12 @@ async def ui() -> str:
         example = {}
     escaped = json.dumps(example, ensure_ascii=False, indent=2).replace("</", "<\\/")
     return f"""<!doctype html>
-<html lang='ru'>
-<meta charset='utf-8'>
-<title>X3 Guilds AI</title>
-<style>
-body{{font-family:system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10141b;color:#e7edf5}}
-textarea{{width:100%;min-height:420px;background:#171e28;color:#e7edf5;border:1px solid #39485d;padding:12px}}
-button{{padding:10px 18px;margin:12px 0}} pre{{white-space:pre-wrap;background:#171e28;padding:12px}}
-</style>
+<html lang='ru'><meta charset='utf-8'><title>X3 Guilds AI</title>
+<style>body{{font-family:system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10141b;color:#e7edf5}}textarea,input{{width:100%;box-sizing:border-box;background:#171e28;color:#e7edf5;border:1px solid #39485d;padding:12px}}textarea{{min-height:420px}}button{{padding:10px 18px;margin:12px 0}}pre{{white-space:pre-wrap;background:#171e28;padding:12px}}</style>
 <h1>X3 Guilds · GigaChat bridge</h1>
-<textarea id='request'>{escaped}</textarea>
-<button onclick='send()'>Отправить</button>
-<pre id='response'></pre>
-<script>
-async function send(){{
- const body=JSON.parse(document.getElementById('request').value);
- const r=await fetch('/v1/chat',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
- document.getElementById('response').textContent=JSON.stringify(await r.json(),null,2);
-}}
-</script>
-</html>"""
+<input id='password' type='password' placeholder='API password (optional)'>
+<textarea id='request'>{escaped}</textarea><button onclick='send()'>Отправить</button><pre id='response'></pre>
+<script>async function send(){{const body=JSON.parse(document.getElementById('request').value);const password=document.getElementById('password').value;const headers={{'Content-Type':'application/json'}};if(password)headers['X-X3AI-Password']=password;const r=await fetch('/v1/chat',{{method:'POST',headers,body:JSON.stringify(body)}});document.getElementById('response').textContent=JSON.stringify(await r.json(),null,2);}}</script></html>"""
 
 
 def run() -> None:
