@@ -13,14 +13,19 @@ if (-not (Test-Path $Data)) { throw "default_data.dat not found: $Data" }
 
 $Sources = @(
     "setup.plugin.guilds.ai.chat",
+    "plugin.guilds.ai.chat.comm",
+    "plugin.guilds.ai.chat.export",
     "plugin.guilds.ai.chat.hotkey"
 )
 
 foreach ($Name in $Sources) {
     $Input = Join-Path $Root "scripts/working/$Name.xs"
     $Output = Join-Path $Root "scripts/$Name.xml"
+    if (-not (Test-Path $Input)) { throw "XScript source not found: $Input" }
     & $Compiler --load_data $Data --compile $Input --out $Output
-    if ($LASTEXITCODE -ne 0) { throw "Compilation failed: $Input" }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $Output)) {
+        throw "Compilation failed: $Input"
+    }
 }
 
-Write-Host "Compiled Guilds AI Chat scripts into scripts/."
+Write-Host "Compiled Guilds AI communication scripts into scripts/."
