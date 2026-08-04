@@ -1,0 +1,8 @@
+.env
+x3guilds-ai.ini
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+data/
+*.sqlite3

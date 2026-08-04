@@ -1,0 +1,54 @@
+name: Living communications tests
+
+on:
+  pull_request:
+    paths:
+      - "orchestrator/**"
+      - "scripts/working/*ai.chat*.xs"
+      - "t/9980-L*.xml"
+      - "BUILD/*ai-chat*.ps1"
+      - ".github/workflows/orchestrator-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "orchestrator/**"
+      - "scripts/working/*ai.chat*.xs"
+      - "t/9980-L*.xml"
+      - "BUILD/*ai-chat*.ps1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            orchestrator
+            scripts/working/setup.plugin.guilds.ai.chat.xs
+            scripts/working/plugin.guilds.ai.chat.comm.xs
+            scripts/working/plugin.guilds.ai.chat.export.xs
+            scripts/working/plugin.guilds.ai.chat.hotkey.xs
+            t/9980-L044.xml
+            t/9980-L007.xml
+            BUILD/build-ai-chat-scripts.ps1
+            BUILD/install-ai-chat-dev.ps1
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: orchestrator/pyproject.toml
+      - name: Install
+        run: python -m pip install -e './orchestrator[dev]'
+      - name: Test
+        run: python -m pytest orchestrator/tests
+      - name: Compile Python bytecode
+        run: python -m compileall -q orchestrator/x3guilds_ai
+      - name: Validate XML text pages
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse('t/9980-L044.xml')
+          ET.parse('t/9980-L007.xml')
+          PY

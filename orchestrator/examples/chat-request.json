@@ -1,0 +1,20 @@
+{
+  "request_id": "manual-0001",
+  "conversation_id": "npc:x3-42",
+  "player_id": "player",
+  "message": "Что происходит в этом секторе?",
+  "entity": {
+    "entity_id": "x3-42",
+    "name": "Капитан Хаалас Тон",
+    "kind": "ship",
+    "race": "Teladi",
+    "faction": "PTNI",
+    "sector": "Profit Center Alpha",
+    "relation": 250,
+    "hull_percent": 87,
+    "cargo": {},
+    "facts": []
+  },
+  "game_time": 182400,
+  "metadata": {}
+}

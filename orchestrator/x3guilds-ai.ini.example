@@ -1,0 +1,39 @@
+; Copy this file to x3guilds-ai.ini. The real INI is ignored by Git.
+; This file is read only by the external Python sidecar, never by X3 or the savegame.
+
+[general]
+provider = mock
+poll_interval_ms = 350
+
+[gigachat]
+; Set provider = gigachat above, then paste the authorization key here.
+credentials =
+scope = GIGACHAT_API_PERS
+model = GigaChat-2
+base_url = https://api.giga.chat
+oauth_url = https://ngw.devices.sberbank.ru:9443/api/v2/oauth
+verify_ssl = true
+timeout_seconds = 45
+retries = 2
+
+[security]
+; Optional password for POST /v1/chat. It is not required by the desktop overlay.
+api_password =
+
+[overlay]
+enabled = true
+always_on_top = true
+width = 620
+height = 420
+
+[memory]
+history_limit = 12
+memory_limit = 20
+
+[paths]
+; Empty request_log enables automatic Documents\Egosoft\X3FL\log09980.txt detection.
+request_log =
+database = data/x3guilds-ai.sqlite3
+response_log = data/x3guilds-ai-responses.log
+checkpoint = data/x3guilds-ai.checkpoint.json
+diagnostics = data/diagnostics
