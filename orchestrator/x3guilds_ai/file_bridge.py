@@ -180,6 +180,11 @@ class FileBridge:
             self._append_diagnostic({"event": "invalid_request", "line": record, "error": str(exc)})
 
     async def run_once(self) -> int:
+        """Consume only complete, newline-terminated records from the X3 log.
+
+        The checkpoint is a byte offset. A trailing partial record is deliberately
+        left unread so the next poll can process it after X3 finishes the write.
+        """
         if not self.request_path.exists():
             return 0
 
@@ -191,21 +196,30 @@ class FileBridge:
             if prefix_length > file_size or self._prefix_hash(prefix_length) != previous_prefix_hash:
                 offset = 0
 
-        processed = 0
-        with self.request_path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+        with self.request_path.open("rb") as handle:
             handle.seek(offset)
-            while True:
-                line = handle.readline()
-                if not line:
-                    break
-                self.stats.lines_seen += 1
-                if not contains_protocol_marker(line):
-                    continue
-                await self._process_protocol_line(line)
-                processed += 1
-            offset = handle.tell()
+            chunk = handle.read()
 
-        self._save_checkpoint(offset)
+        if not chunk:
+            return 0
+
+        last_newline = chunk.rfind(b"\n")
+        if last_newline < 0:
+            return 0
+
+        complete = chunk[: last_newline + 1]
+        next_offset = offset + len(complete)
+        processed = 0
+
+        for raw_line in complete.splitlines():
+            self.stats.lines_seen += 1
+            line = raw_line.decode("utf-8-sig", errors="replace")
+            if not contains_protocol_marker(line):
+                continue
+            await self._process_protocol_line(line)
+            processed += 1
+
+        self._save_checkpoint(next_offset)
         return processed
 
     async def run_forever(
