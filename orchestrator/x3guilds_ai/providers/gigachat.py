@@ -32,6 +32,7 @@ class GigaChatProvider:
         verify_ssl: bool = True,
         timeout: float = 45.0,
         retries: int = 2,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not credentials:
             raise ValueError("GigaChat credentials are required")
@@ -43,6 +44,7 @@ class GigaChatProvider:
         self._verify_ssl = verify_ssl
         self._timeout = timeout
         self._retries = retries
+        self._transport = transport
         self._token: _AccessToken | None = None
         self._token_lock = asyncio.Lock()
 
@@ -113,6 +115,13 @@ class GigaChatProvider:
         schema["additionalProperties"] = False
         return schema
 
+    @staticmethod
+    def _refresh_after(error: Exception | None) -> bool:
+        return (
+            isinstance(error, httpx.HTTPStatusError)
+            and error.response.status_code == 401
+        )
+
     async def _post_completion(
         self,
         client: httpx.AsyncClient,
@@ -121,7 +130,10 @@ class GigaChatProvider:
         last_error: Exception | None = None
         for attempt in range(self._retries + 1):
             try:
-                token = await self._get_token(client, force=attempt > 0 and isinstance(last_error, httpx.HTTPStatusError))
+                token = await self._get_token(
+                    client,
+                    force=attempt > 0 and self._refresh_after(last_error),
+                )
                 response = await client.post(
                     f"{self._base_url}/v1/chat/completions",
                     headers={
@@ -161,6 +173,33 @@ class GigaChatProvider:
                 await asyncio.sleep(min(2**attempt, 4))
         raise RuntimeError("unreachable") from last_error
 
+    @staticmethod
+    def _extract_content(payload: object) -> str | dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("Unexpected GigaChat response envelope")
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ValueError("GigaChat response contains no choices")
+
+        choice = choices[0]
+        finish_reason = choice.get("finish_reason")
+        if finish_reason not in {None, "stop"}:
+            reasons = {
+                "blacklist": "GigaChat blocked the dialogue because of thematic restrictions",
+                "length": "GigaChat response was truncated by the token limit",
+                "function_call": "GigaChat unexpectedly returned a function call",
+                "error": "GigaChat returned an invalid generated result",
+            }
+            raise ValueError(reasons.get(str(finish_reason), f"Unexpected finish_reason: {finish_reason}"))
+
+        message = choice.get("message")
+        if not isinstance(message, dict) or "content" not in message:
+            raise ValueError("GigaChat response contains no assistant content")
+        content = message["content"]
+        if not isinstance(content, (str, dict)):
+            raise ValueError("Unexpected GigaChat response content")
+        return content
+
     async def generate(
         self,
         request: ChatRequest,
@@ -176,18 +215,15 @@ class GigaChatProvider:
         async with httpx.AsyncClient(
             verify=self._verify_ssl,
             timeout=self._timeout,
+            transport=self._transport,
         ) as client:
             response = await self._post_completion(client, messages)
-            payload = response.json()
+            content = self._extract_content(response.json())
 
-        content = payload["choices"][0]["message"]["content"]
         if isinstance(content, dict):
             return ModelDialogue.model_validate(content)
-        if not isinstance(content, str):
-            raise ValueError("Unexpected GigaChat response content")
         try:
             return ModelDialogue.model_validate_json(content)
         except Exception as exc:
-            raise ValueError(
-                f"Invalid structured GigaChat response: {json.dumps(content, ensure_ascii=False)}"
-            ) from exc
+            preview = content[:300].replace("\n", " ")
+            raise ValueError(f"Invalid structured GigaChat response: {json.dumps(preview, ensure_ascii=False)}") from exc
