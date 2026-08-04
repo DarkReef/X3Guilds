@@ -13,8 +13,10 @@ def create_provider(settings: Settings) -> DialogueProvider:
         return MockDialogueProvider()
     if settings.provider == "gigachat":
         if not settings.gigachat_credentials:
+            location = settings.config_path or "x3guilds-ai.ini"
             raise ValueError(
-                "X3AI_GIGACHAT_CREDENTIALS is required when X3AI_PROVIDER=gigachat"
+                "GigaChat credentials are required: set [gigachat] credentials "
+                f"in {location} or X3AI_GIGACHAT_CREDENTIALS"
             )
         return GigaChatProvider(
             credentials=settings.gigachat_credentials,
