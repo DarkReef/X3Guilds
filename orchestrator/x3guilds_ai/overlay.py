@@ -5,12 +5,7 @@ import threading
 from dataclasses import dataclass
 from typing import Literal
 
-from x3guilds_ai.models import (
-    BridgeError,
-    ChatRequest,
-    ContextSelection,
-    DialogueResponse,
-)
+from x3guilds_ai.models import BridgeError, ChatRequest, ContextSelection, DialogueResponse
 
 
 @dataclass(slots=True)
@@ -53,9 +48,7 @@ class OverlayEventQueue:
         with self._lock:
             self._context = context.model_copy(deep=True)
         details = " · ".join(
-            value
-            for value in [context.entity.kind, context.entity.race, context.entity.sector]
-            if value
+            value for value in [context.entity.kind, context.entity.race, context.entity.sector] if value
         )
         self.put(
             OverlayEvent(
@@ -71,7 +64,13 @@ class OverlayEventQueue:
             return False
         context = self.active_context()
         if context is None:
-            self.put(OverlayEvent("error", "Система связи", "Сначала выберите цель в X3FL."))
+            self.put(
+                OverlayEvent(
+                    "error",
+                    "Система связи",
+                    "В X3FL нажмите C на корабле/станции и выберите «Свободный разговор».",
+                )
+            )
             return False
         self._submissions.put(OverlaySubmission(context=context, message=cleaned))
         return True
@@ -84,21 +83,10 @@ class OverlayEventQueue:
             except queue.Empty:
                 return items
 
-    def bridge_callback(
-        self,
-        request: ChatRequest,
-        result: DialogueResponse | BridgeError,
-    ) -> None:
+    def bridge_callback(self, request: ChatRequest, result: DialogueResponse | BridgeError) -> None:
         self.put(OverlayEvent("request", "Игрок", request.message))
         if isinstance(result, DialogueResponse):
-            self.put(
-                OverlayEvent(
-                    "response",
-                    request.entity.name,
-                    result.reply,
-                    result.mood,
-                )
-            )
+            self.put(OverlayEvent("response", request.entity.name, result.reply, result.mood))
         else:
             self.put(
                 OverlayEvent(
@@ -134,10 +122,12 @@ class ChatOverlay:
 
         frame = ttk.Frame(self.root, padding=8)
         frame.pack(fill="both", expand=True)
-
         header = ttk.Frame(frame)
         header.pack(fill="x")
-        self.status = ttk.Label(header, text="В X3FL выберите объект и нажмите горячую клавишу")
+        self.status = ttk.Label(
+            header,
+            text="В X3FL нажмите C и выберите «Свободный разговор»",
+        )
         self.status.pack(side="left", fill="x", expand=True)
         ttk.Button(header, text="Скрыть", command=self.root.iconify).pack(side="right")
 
@@ -160,7 +150,6 @@ class ChatOverlay:
         self.message.pack(side="left", fill="x", expand=True)
         self.message.bind("<Return>", self._send)
         ttk.Button(composer, text="Передать", command=self._send).pack(side="right", padx=(8, 0))
-
         self.root.after(100, self._poll)
 
     def _send(self, _event=None) -> None:
@@ -169,9 +158,16 @@ class ChatOverlay:
             self.message.delete(0, "end")
             self.status.configure(text="Передача сообщения…")
 
+    def _activate(self) -> None:
+        self.root.deiconify()
+        self.root.lift()
+        self.root.after(20, self.message.focus_force)
+
     def _append(self, event: OverlayEvent) -> None:
         self.transcript.configure(state="normal")
-        tag = "error" if event.kind == "error" else ("system" if event.kind in {"status", "context"} else "speaker")
+        tag = "error" if event.kind == "error" else (
+            "system" if event.kind in {"status", "context"} else "speaker"
+        )
         self.transcript.insert("end", f"{event.speaker}\n", tag)
         self.transcript.insert("end", f"{event.text}\n\n")
         self.transcript.see("end")
@@ -182,7 +178,7 @@ class ChatOverlay:
             self.status.configure(text="Ошибка канала связи")
         elif event.kind == "context":
             self.status.configure(text=f"Активная связь: {event.text}")
-            self.message.focus_set()
+            self._activate()
         elif event.kind == "status":
             self.status.configure(text=event.text)
         else:
