@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "x3guilds-ai-orchestrator"
-version = "0.3.0"
+version = "0.4.0"
 description = "GigaChat dialogue, memory and overlay sidecar for X3 Guilds"
 readme = "README.md"
 requires-python = ">=3.11"
