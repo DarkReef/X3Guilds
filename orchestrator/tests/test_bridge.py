@@ -5,12 +5,7 @@ from x3guilds_ai.bridge import (
     parse_chat_request,
     parse_context_selection,
 )
-from x3guilds_ai.models import (
-    ChatRequest,
-    ContextSelection,
-    DialogueResponse,
-    EntityContext,
-)
+from x3guilds_ai.models import ChatRequest, ContextSelection, DialogueResponse, EntityContext
 
 
 def make_entity() -> EntityContext:
@@ -40,9 +35,25 @@ def test_request_round_trip() -> None:
     assert parse_chat_request(encode_chat_request(request)) == request
 
 
-def test_context_round_trip() -> None:
+def test_v2_context_round_trip() -> None:
     context = ContextSelection(context_id="ctx-1", entity=make_entity(), game_time=42)
     assert parse_context_selection(encode_context_selection(context)) == context
+
+
+def test_raw_x3_v2_context_keeps_pipe_in_object_name() -> None:
+    line = (
+        "XUGC|2|CHAT_CONTEXT|ctx-1|x3-1|ship|Teladi|PTNI|Profit Center Alpha|100|42|"
+        "Капитан | Тон"
+    )
+    context = parse_context_selection(line)
+    assert context.entity.name == "Капитан | Тон"
+
+
+def test_legacy_v1_context_is_still_supported() -> None:
+    line = "XUGC|1|CHAT_CONTEXT|ctx-1|x3-1|Pilot|ship|Teladi|PTNI|Sector|100|42"
+    context = parse_context_selection(line)
+    assert context.entity.name == "Pilot"
+    assert context.entity.kind == "ship"
 
 
 def test_parser_accepts_log_prefix() -> None:
@@ -62,5 +73,5 @@ def test_response_is_one_line() -> None:
         actions=[],
     )
     encoded = encode_chat_response(response)
-    assert encoded.startswith("XUGC|1|CHAT_RESPONSE|")
+    assert encoded.startswith("XUGC|2|CHAT_RESPONSE|")
     assert "\n" not in encoded
