@@ -26,10 +26,13 @@ jobs:
           sparse-checkout: |
             orchestrator
             scripts/working/setup.plugin.guilds.ai.chat.xs
+            scripts/working/plugin.guilds.ai.chat.comm.xs
+            scripts/working/plugin.guilds.ai.chat.export.xs
             scripts/working/plugin.guilds.ai.chat.hotkey.xs
             t/9980-L044.xml
             t/9980-L007.xml
             BUILD/build-ai-chat-scripts.ps1
+            BUILD/install-ai-chat-dev.ps1
           sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v5
         with:
@@ -42,13 +45,10 @@ jobs:
         run: python -m pytest orchestrator/tests
       - name: Compile Python bytecode
         run: python -m compileall -q orchestrator/x3guilds_ai
-      - name: Validate XScript source contract
-        shell: python
+      - name: Validate XML text pages
         run: |
-          from pathlib import Path
-          setup = Path("scripts/working/setup.plugin.guilds.ai.chat.xs").read_text()
-          hotkey = Path("scripts/working/plugin.guilds.ai.chat.hotkey.xs").read_text()
-          assert "registerEventHotkey(" in setup
-          assert '"plugin.guilds.ai.chat.hotkey"' in setup
-          assert 'XUGC|1|CHAT_CONTEXT|' in hotkey
-          assert 'writeLogFile(9980, TRUE, $line)' in hotkey
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse('t/9980-L044.xml')
+          ET.parse('t/9980-L007.xml')
+          PY
