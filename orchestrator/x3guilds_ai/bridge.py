@@ -12,10 +12,18 @@ from x3guilds_ai.models import (
 
 
 PREFIX = "XUGC"
-VERSION = "1"
-REQUEST_MARKER = f"{PREFIX}|{VERSION}|CHAT_REQUEST|"
-CONTEXT_MARKER = f"{PREFIX}|{VERSION}|CHAT_CONTEXT|"
-RECORD_MARKERS = (REQUEST_MARKER, CONTEXT_MARKER)
+VERSION = "2"
+LEGACY_VERSION = "1"
+
+REQUEST_MARKERS = (
+    f"{PREFIX}|{VERSION}|CHAT_REQUEST|",
+    f"{PREFIX}|{LEGACY_VERSION}|CHAT_REQUEST|",
+)
+CONTEXT_MARKERS = (
+    f"{PREFIX}|{VERSION}|CHAT_CONTEXT|",
+    f"{PREFIX}|{LEGACY_VERSION}|CHAT_CONTEXT|",
+)
+RECORD_MARKERS = REQUEST_MARKERS + CONTEXT_MARKERS
 
 
 def _escape(value: object) -> str:
@@ -34,24 +42,58 @@ def extract_protocol_record(raw_line: str) -> str | None:
     return raw_line[min(positions) :].strip()
 
 
+def is_context_record(record: str) -> bool:
+    return record.startswith(CONTEXT_MARKERS)
+
+
+def is_request_record(record: str) -> bool:
+    return record.startswith(REQUEST_MARKERS)
+
+
+def contains_protocol_marker(raw_line: str) -> bool:
+    return any(marker in raw_line for marker in RECORD_MARKERS)
+
+
 def parse_context_selection(line: str) -> ContextSelection:
-    """Parse an object-selection record emitted by the in-game hotkey."""
+    """Parse a target-selection record emitted by the X3 communication script."""
     record = extract_protocol_record(line) or line.strip()
-    parts = record.split("|", 11)
-    if len(parts) != 12 or parts[:3] != [PREFIX, VERSION, "CHAT_CONTEXT"]:
+    header = record.split("|", 3)
+    if len(header) < 3 or header[0] != PREFIX or header[2] != "CHAT_CONTEXT":
         raise ValueError("Invalid XUGC context record")
 
-    (
-        context_id,
-        entity_id,
-        name,
-        kind,
-        race,
-        faction,
-        sector,
-        relation,
-        game_time,
-    ) = (_unescape(item) for item in parts[3:])
+    version = header[1]
+    if version == VERSION:
+        parts = record.split("|", 11)
+        if len(parts) != 12:
+            raise ValueError("Invalid XUGC v2 context record")
+        (
+            context_id,
+            entity_id,
+            kind,
+            race,
+            faction,
+            sector,
+            relation,
+            game_time,
+            name,
+        ) = (_unescape(item) for item in parts[3:])
+    elif version == LEGACY_VERSION:
+        parts = record.split("|", 11)
+        if len(parts) != 12:
+            raise ValueError("Invalid XUGC v1 context record")
+        (
+            context_id,
+            entity_id,
+            name,
+            kind,
+            race,
+            faction,
+            sector,
+            relation,
+            game_time,
+        ) = (_unescape(item) for item in parts[3:])
+    else:
+        raise ValueError(f"Unsupported XUGC version: {version}")
 
     return ContextSelection(
         context_id=context_id,
@@ -69,16 +111,13 @@ def parse_context_selection(line: str) -> ContextSelection:
 
 
 def parse_chat_request(line: str) -> ChatRequest:
-    """Parse one X3 log line into a validated request.
-
-    Protocol fields:
-    XUGC|1|CHAT_REQUEST|request|conversation|entity_id|name|kind|race|faction|
-    sector|relation|game_time|message
-    """
+    """Parse one XUGC chat request into a validated request."""
     record = extract_protocol_record(line) or line.strip()
     parts = record.split("|", 13)
-    if len(parts) != 14 or parts[:3] != [PREFIX, VERSION, "CHAT_REQUEST"]:
+    if len(parts) != 14 or parts[0] != PREFIX or parts[2] != "CHAT_REQUEST":
         raise ValueError("Invalid XUGC chat request line")
+    if parts[1] not in {VERSION, LEGACY_VERSION}:
+        raise ValueError(f"Unsupported XUGC version: {parts[1]}")
 
     (
         request_id,
@@ -120,13 +159,13 @@ def encode_context_selection(context: ContextSelection) -> str:
             "CHAT_CONTEXT",
             _escape(context.context_id),
             _escape(entity.entity_id),
-            _escape(entity.name),
             _escape(entity.kind),
             _escape(entity.race or ""),
             _escape(entity.faction or ""),
             _escape(entity.sector or ""),
             _escape(entity.relation),
             _escape(context.game_time or ""),
+            _escape(entity.name),
         ]
     )
 
