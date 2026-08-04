@@ -45,7 +45,6 @@ async def _run_overlay_worker(
 ) -> None:
     await bridge.service.initialize()
     events.put(OverlayEvent("status", "Система", f"Слежение: {bridge.request_path}"))
-
     while not worker_stop.is_set():
         await bridge.run_once()
         for submission in events.drain_submissions():
@@ -64,6 +63,7 @@ async def _run_overlay_worker(
 
 def run_desktop() -> None:
     parser = argparse.ArgumentParser(description="X3 Guilds GigaChat desktop sidecar")
+    parser.add_argument("--config", type=Path, help="path to x3guilds-ai.ini")
     parser.add_argument("--no-overlay", action="store_true", help="run without Tk overlay")
     parser.add_argument("--once", action="store_true", help="process current log tail once")
     parser.add_argument("--verbose", action="store_true")
@@ -73,7 +73,7 @@ def run_desktop() -> None:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    settings = Settings.from_env()
+    settings = Settings.load(args.config)
     request_path = _request_path(settings)
     service = create_service(settings)
     events = OverlayEventQueue()
@@ -87,6 +87,7 @@ def run_desktop() -> None:
         context_callback=events.context_callback,
     )
 
+    logger.info("Configuration: %s", settings.config_path or "defaults/environment")
     logger.info("Watching X3FL log: %s", request_path)
     logger.info("Provider: %s", settings.provider)
 
@@ -117,7 +118,6 @@ def run_desktop() -> None:
 
     thread = threading.Thread(target=worker, name="x3guilds-ai-worker", daemon=True)
     thread.start()
-
     try:
         overlay = ChatOverlay(
             events=events,
