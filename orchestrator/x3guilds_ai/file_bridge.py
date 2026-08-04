@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from x3guilds_ai.bridge import (
-    CONTEXT_MARKER,
-    REQUEST_MARKER,
     encode_bridge_error,
     encode_chat_response,
+    contains_protocol_marker,
     extract_protocol_record,
+    is_context_record,
+    is_request_record,
     parse_chat_request,
     parse_context_selection,
 )
@@ -160,7 +161,7 @@ class FileBridge:
         if record is None:
             return
         try:
-            if record.startswith(CONTEXT_MARKER):
+            if is_context_record(record):
                 context = parse_context_selection(record)
                 self.stats.contexts_seen += 1
                 self._append_diagnostic(
@@ -168,7 +169,7 @@ class FileBridge:
                 )
                 await self._call_callback(self.context_callback, context)
                 return
-            if record.startswith(REQUEST_MARKER):
+            if is_request_record(record):
                 request = parse_chat_request(record)
                 await self.process_request(request)
                 return
@@ -198,7 +199,7 @@ class FileBridge:
                 if not line:
                     break
                 self.stats.lines_seen += 1
-                if REQUEST_MARKER not in line and CONTEXT_MARKER not in line:
+                if not contains_protocol_marker(line):
                     continue
                 await self._process_protocol_line(line)
                 processed += 1
