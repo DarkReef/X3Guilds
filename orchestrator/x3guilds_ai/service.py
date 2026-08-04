@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from x3guilds_ai.memory import SQLiteMemoryStore
 from x3guilds_ai.models import ChatRequest, DialogueResponse, StoredMessage
 from x3guilds_ai.providers.base import DialogueProvider
@@ -18,11 +20,19 @@ class ChatService:
         self._memory = memory
         self._history_limit = history_limit
         self._memory_limit = memory_limit
+        # A single-player sidecar benefits more from deterministic ordering than
+        # parallel model calls. The lock keeps cache checks, history updates and
+        # request-id idempotency in one transaction-like critical section.
+        self._chat_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         await self._memory.initialize()
 
     async def chat(self, request: ChatRequest) -> DialogueResponse:
+        async with self._chat_lock:
+            return await self._chat_locked(request)
+
+    async def _chat_locked(self, request: ChatRequest) -> DialogueResponse:
         cached = await self._memory.get_cached(request)
         if cached is not None:
             return cached
